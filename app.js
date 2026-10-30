@@ -1,6 +1,6 @@
 'use strict';
 /* Eli5 – explain any word or phrase like you're five */
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const PROXY = (window.ELI5_PROXY || '').replace(/\/$/, '');
 const $ = s => document.querySelector(s);
