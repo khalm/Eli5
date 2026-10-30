@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Eli5</title>
+<meta name="description" content="Type or say any word or phrase and get it explained like you're five.">
+<meta name="theme-color" content="#fff7e8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1726" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<header class="top">
+  <button id="backBtn" class="icon-btn" hidden aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+  <div class="brand" id="brand"><img src="icon.svg" alt="" width="30" height="30"><span>Eli5</span></div>
+  <div class="spacer"></div>
+  <button id="installBtn" class="pill-btn" hidden><svg viewBox="0 0 24 24"><path d="M12 4v11m-5-5l5 5 5-5M5 20h14"/></svg><span data-t="install">Install app</span></button>
+  <button id="langBtn" class="pill-btn lang" aria-label="Language"><span id="langLabel">EN</span></button>
+  <button id="settingsBtn" class="icon-btn" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+</header>
+
+<main id="home" class="view">
+  <section class="hero">
+    <h1 data-t="heroTitle">What do you wonder about?</h1>
+    <p class="sub" data-t="heroSub">Type or say a word or phrase. I'll explain it like you're five.</p>
+    <form id="askForm" class="composer big" autocomplete="off">
+      <input id="askInput" type="text" enterkeyhint="go" maxlength="300" data-tp="askPh" placeholder="e.g. black hole">
+      <button type="button" class="mic" id="askMic" aria-label="Talk"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <button type="submit" class="go" aria-label="Explain"><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6l6 6-6 6"/></svg></button>
+    </form>
+    <p class="listening" id="askListening" hidden><span class="dot"></span><span data-t="listening">Listening… talk now</span></p>
+    <div class="try"><span data-t="tryLabel">Try:</span><div id="tryChips" class="chips"></div></div>
+  </section>
+  <section id="recentWrap" class="recent" hidden>
+    <div class="recent-head"><h2 data-t="recent">Recent</h2><button id="clearRecent" class="link-btn" data-t="clear">Clear</button></div>
+    <ul id="recentList"></ul>
+  </section>
+  <footer class="foot"><span id="versionLabel" class="version"></span></footer>
+</main>
+
+<main id="thread" class="view" hidden>
+  <h1 id="topicTitle" class="topic"></h1>
+  <div id="turns"></div>
+  <div id="more" class="more" hidden>
+    <p class="more-label" data-t="wantMore">Want more?</p>
+    <div class="chips" id="moreChips"></div>
+  </div>
+  <div class="bottom-pad"></div>
+</main>
+
+<form id="followForm" class="composer follow" autocomplete="off" hidden>
+  <input id="followInput" type="text" enterkeyhint="send" maxlength="300" data-tp="followPh" placeholder="Ask about this…">
+  <button type="button" class="mic" id="followMic" aria-label="Talk"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+  <button type="submit" class="go" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6l6 6-6 6"/></svg></button>
+</form>
+
+<dialog id="settingsDlg">
+  <form method="dialog" class="dlg">
+    <h2 data-t="settings">Settings</h2>
+    <label class="field"><span data-t="lang">Language</span>
+      <select id="setLang"><option value="en">English</option><option value="nb">Norsk</option></select></label>
+    <label class="field"><span data-t="readAloud">Read answers aloud</span>
+      <select id="setRead"><option value="off" data-t="readOff">Off</option><option value="voice" data-t="readVoice">When I talk</option><option value="always" data-t="readAlways">Always</option></select></label>
+    <label class="field"><span data-t="voice">Voice</span><select id="setVoice"></select></label>
+    <label class="field"><span><span data-t="speed">Speaking speed</span> <b id="rateVal"></b></span>
+      <input type="range" id="setRate" min="0.6" max="1.4" step="0.05"></label>
+    <details class="adv"><summary data-t="advanced">Advanced</summary>
+      <label class="field"><span data-t="ownKey">Own Gemini key (optional)</span>
+        <input id="setKey" type="password" placeholder="AIza…" autocomplete="off"></label>
+      <p class="hint" data-t="ownKeyHint">Only needed if the built-in AI isn't working. Free key at aistudio.google.com/apikey</p>
+    </details>
+    <p class="hint" id="statusLine"></p>
+    <div class="dlg-actions"><button class="pill-btn primary" value="ok" data-t="done">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="iosDlg">
+  <form method="dialog" class="dlg">
+    <h2 data-t="iosTitle">Install on iPhone</h2>
+    <p data-t="iosText">Tap the Share button in Safari, then «Add to Home Screen».</p>
+    <div class="dlg-actions"><button class="pill-btn primary" data-t="ok">OK</button></div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
