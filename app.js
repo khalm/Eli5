@@ -1,6 +1,6 @@
 'use strict';
 /* Eli5 – explain any word or phrase like you're five */
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const PROXY = (window.ELI5_PROXY || '').replace(/\/$/, '');
 const $ = s => document.querySelector(s);
@@ -104,9 +104,9 @@ async function pickModels() {
   } catch { }
   return [DEFAULT_MODEL, 'gemini-flash-lite-latest'];
 }
-function thinkCfg(m) {
+function thinkCfg(m, level = 'low') {
   if (/gemini-2\.5/.test(m)) return /pro/.test(m) ? null : { thinkingBudget: 0 };
-  if (/gemini-([3-9]|\d{2})/.test(m)) return { thinkingLevel: 'low' };
+  if (/gemini-([3-9]|\d{2})/.test(m)) return { thinkingLevel: level };
   return null;
 }
 async function readSSE(r, onText, signal) {
@@ -138,7 +138,7 @@ function orderModels(list) {
 const retryDelayOf = msg => { const m = String(msg).match(/retry in ([\d.]+)s|"retryDelay":\s*"(\d+)s"/i); return m ? Math.ceil(+(m[1] || m[2]) * 1000) : 0; };
 
 let lastModel = null;
-async function gemini({ contents, system = '', temp = 0.3, onText = null, signal = null, tools = null, avoid = null }) {
+async function gemini({ contents, system = '', temp = 0.3, onText = null, signal = null, tools = null, avoid = null, think = 'low' }) {
   if (!hasKey()) throw new Error(t('noKey'));
   if (!navigator.onLine) throw new Error(t('offline'));
   const base = await pickModels(), stream = !!onText, direct = !!settings.apiKey;
@@ -154,13 +154,13 @@ async function gemini({ contents, system = '', temp = 0.3, onText = null, signal
       let useThink = true, useTools = !!tools && !(searchOffUntil > Date.now());
       for (let again = 0; again < 3; again++) {
         const gc = { ...body.generationConfig };
-        if (useThink) { const th = thinkCfg(m); if (th) gc.thinkingConfig = th; }
+        if (useThink) { const th = thinkCfg(m, think); if (th) gc.thinkingConfig = th; }
         const url = direct
           ? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:${stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`
           : `${PROXY}/${stream ? 'stream' : 'gemini'}/${encodeURIComponent(m)}`;
         const ac = new AbortController(); let started = false;
         const onAbort = () => ac.abort(); signal?.addEventListener('abort', onAbort);
-        let timer = setTimeout(() => ac.abort(), 25000);
+        let timer = setTimeout(() => ac.abort(), stream ? 20000 : 15000);
         const r = await fetch(url, {
           method: 'POST', signal: ac.signal, body: JSON.stringify({ ...body, generationConfig: gc, ...(useTools ? { tools } : {}) }),
           headers: direct ? { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey } : { 'Content-Type': 'application/json' },
@@ -284,17 +284,42 @@ async function wikiArticle(lang, page, max, signal) {
   if (text.length > max) text = text.slice(0, max).replace(/\s+\S*$/, '') + ' …';
   return { lang, title: page.title, url: page.fullurl || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(page.title.replace(/ /g, '_'))}`, text };
 }
-async function wikiSearch(q, lang, n, max, signal) {
-  const d = await wikiApi(lang, { generator: 'search', gsrsearch: q, gsrlimit: '6', prop: 'pageprops|info', ppprop: 'disambiguation', inprop: 'url', redirects: '1' }, signal);
-  const pages = (d.query?.pages || []).filter(p => !(p.pageprops && 'disambiguation' in p.pageprops)).sort((a, b) => a.index - b.index).slice(0, n);
-  return (await Promise.all(pages.map((p, i) => wikiArticle(lang, p, i ? max / 2 : max, signal).catch(() => null)))).filter(Boolean);
+/* One quick request per language: search + the article intros in one go */
+async function wikiSearch(q, lang, n, signal) {
+  const d = await wikiApi(lang, { generator: 'search', gsrsearch: q, gsrlimit: '5', prop: 'extracts|pageprops|info', exintro: '1', explaintext: '1', exlimit: '5', ppprop: 'disambiguation', inprop: 'url', redirects: '1' }, signal);
+  return (d.query?.pages || []).filter(p => !(p.pageprops && 'disambiguation' in p.pageprops) && (p.extract || '').length >= 80)
+    .sort((a, b) => a.index - b.index).slice(0, n)
+    .map((p, i) => {
+      let text = p.extract.replace(/\n{3,}/g, '\n\n').trim(); const max = i ? 1200 : 2500;
+      if (text.length > max) text = text.slice(0, max).replace(/\s+\S*$/, '') + ' …';
+      return { lang, title: p.title, url: p.fullurl || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(p.title.replace(/ /g, '_'))}`, text };
+    });
 }
-async function gatherSources(q, lang, signal) {
+const wikiCache = new Map();   // looked up while you type, so it's ready when you press go
+function gatherSources(q, lang) {
+  const key = lang + '|' + q.trim().toLowerCase();
+  if (wikiCache.has(key)) return wikiCache.get(key);
   const main = WIKI_LANG[lang] || 'en';
-  const jobs = [wikiSearch(q, main, 2, 6000, signal)];
-  if (main !== 'en') jobs.push(wikiSearch(q, 'en', 1, 6000, signal));   // English Wikipedia is often more complete
-  const res = await Promise.allSettled(jobs);
-  return res.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+  const jobs = [wikiSearch(q, main, 2)];
+  if (main !== 'en') jobs.push(wikiSearch(q, 'en', 1));   // English Wikipedia is often more complete
+  const pr = Promise.allSettled(jobs).then(res => res.flatMap(r => r.status === 'fulfilled' ? r.value : []));
+  wikiCache.set(key, pr); if (wikiCache.size > 30) wikiCache.delete(wikiCache.keys().next().value);
+  pr.then(l => { if (!l.length) wikiCache.delete(key); });
+  return pr;
+}
+function prefetchWiki(q) { q = cleanTopic(q || ''); if (q.length >= 2) gatherSources(q, settings.lang).catch(() => { }); }
+let prefetchTimer;
+function prefetchSoon(q) { clearTimeout(prefetchTimer); prefetchTimer = setTimeout(() => prefetchWiki(q), 450); }
+/* Fuller articles for "tell me more" etc. – fetched in the background after the first answer */
+const deepJobs = new Map();
+function deepenSources(th) {
+  if (deepJobs.has(th.id)) return deepJobs.get(th.id);
+  const job = Promise.all((th.sources || []).map(async (s, i) => {
+    if (s.full) return;
+    const a = await wikiArticle(s.lang, s, i ? 2500 : 6000).catch(() => null);
+    if (a) { s.text = a.text; s.full = true; }
+  }));
+  deepJobs.set(th.id, job); return job;
 }
 function addSources(th, list) {
   th.sources = th.sources || [];
@@ -357,20 +382,20 @@ async function ask(spoken) {
   try {
     // 1. Look it up on Wikipedia (the topic first time, and any tapped word)
     const req = th.turns.filter(x => x.role === 'user').slice(-1)[0];
-    if (!th.sources) addSources(th, await gatherSources(th.topic, th.lang, signal).catch(() => []));
-    if (req.kind === 'term') addSources(th, await gatherSources(req.term, th.lang, signal).catch(() => []));
+    if (!th.sources) addSources(th, await gatherSources(th.topic, th.lang).catch(() => []));
+    else if (req.kind === 'term') addSources(th, await gatherSources(req.term, th.lang).catch(() => []));
+    else if (req !== th.turns[0]) await Promise.race([deepenSources(th), sleep(2500)]);   // more depth for follow-ups
     if (signal.aborted) throw new DOMException('aborted', 'AbortError');
     // 2. Write the answer from the sources
     setStatus(turn, 'write');
     const contents = contentsOf({ turns: th.turns.filter(x => x !== turn) });
-    let txt = await gemini({ contents, system: systemPrompt(th), signal });
-    const writer = lastModel;
+    let txt = await gemini({ contents, system: systemPrompt(th), signal, think: 'minimal' });
     // 3. Fact-check it (another model, against the same sources) and fix anything wrong before showing it
     setStatus(turn, 'check');
     const reqText = req === th.turns[0] ? `Explain: ${th.topic}` : `${req.prompt || req.text} (the conversation is about: ${th.topic})`;
     try {
       const v = parseJSON(await gemini({
-        temp: 0, signal, avoid: writer, system: verifyPrompt(th),
+        temp: 0, signal, system: verifyPrompt(th),
         contents: [{ role: 'user', parts: [{ text: `REQUEST: ${reqText}\nLISTENER: ${LEVEL[th.age].split('.')[0]}\n\nANSWER TO CHECK:\n${txt}` }] }],
       }));
       if (v.ok === false && typeof v.fixed === 'string' && v.fixed.trim().length > 10) { txt = v.fixed.trim(); turn.checked = 'fixed'; }
@@ -383,7 +408,7 @@ async function ask(spoken) {
     }
     turn.text = txt; turn.pending = false; delete turn.status;
     if (current !== th) return;
-    th.t = Date.now(); saveThread(th);
+    th.t = Date.now(); saveThread(th); deepenSources(th);
     renderThread();
     if (settings.read === 'always' || (settings.read === 'voice' && spoken)) speak(turn, th.turns.length - 1);
   } catch (e) {
@@ -492,6 +517,8 @@ $('#backBtn').onclick = () => history.state?.v === 'thread' ? history.back() : s
 $('#brand').onclick = () => { if (current) $('#backBtn').click(); };
 
 /* ---------- events ---------- */
+$('#askInput').addEventListener('input', e => prefetchSoon(e.target.value));
+$('#tryChips').addEventListener('pointerdown', e => { const b = e.target.closest('[data-try]'); if (b) prefetchWiki(b.dataset.try); });
 $('#askForm').onsubmit = e => { e.preventDefault(); stopListening(); const v = $('#askInput').value; if (v.trim()) { $('#askInput').blur(); explain(v); } };
 $('#followForm').onsubmit = e => {
   e.preventDefault(); stopListening(); const v = $('#followInput').value.trim(); if (!v || busy) return;
@@ -592,7 +619,7 @@ function listenSR(btn, input, onFinal) {
   r.onresult = ev => {
     let interim = ''; finalText = '';
     for (let i = 0; i < ev.results.length; i++) { const res = ev.results[i]; (res.isFinal ? (finalText += res[0].transcript) : (interim += res[0].transcript)); }
-    gotAny = true; input.value = (finalText + interim).trim();
+    gotAny = true; input.value = (finalText + interim).trim(); if (input.id === 'askInput') prefetchSoon(input.value);
   };
   r.onerror = ev => {
     if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') toast(t('micDenied'), 4500);
