@@ -4,6 +4,7 @@ Type or say any word or phrase, and Eli5 explains it in the simplest words possi
 
 **Open the app:** https://khalm.github.io/Eli5/
 
+- 📚 Looks every topic up on Wikipedia, writes the answer from it, then a second AI pass fact-checks the answer against the article and fixes anything wrong before you see it. Facts only, no opinions.
 - ⌨️ / 🎤 Type or talk (tap the mic, tap again when you're done)
 - 🔍 Want more? Tell me more · Say it another way · Give an example · Why? · Step up the age (8 → 12 → 16 → grown-up)
 - 🟩 Tap a highlighted word to get that word explained too

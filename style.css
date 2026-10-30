@@ -128,3 +128,8 @@ dialog::backdrop { background: rgba(20, 12, 40, .45); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 @media (max-width: 440px) { body.in-thread #installBtn span { display: none; } body.in-thread #installBtn { padding: 0 10px; } }
+.card .status { margin: -6px 0 12px; color: var(--muted); font-weight: 700; font-size: 15px; }
+.card .check { margin: 2px 0 8px; font-size: 13px; font-weight: 700; color: var(--mint-ink); }
+.card .check a { color: inherit; }
+.card .check.warn { color: var(--muted); }
+.card .check .link-btn { padding: 0 4px; font-size: 13px; color: var(--grape); }

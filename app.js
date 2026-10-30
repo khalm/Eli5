@@ -1,6 +1,6 @@
 'use strict';
 /* Eli5 – explain any word or phrase like you're five */
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const PROXY = (window.ELI5_PROXY || '').replace(/\/$/, '');
 const $ = s => document.querySelector(s);
@@ -32,6 +32,8 @@ const T = {
     transcribing: 'Writing down what you said…', noKey: 'The AI isn’t set up yet. The owner must add the CLOUDFLARE_API_TOKEN secret in the GitHub repo (or add your own key in Settings).',
     offline: 'You are offline. Connect to the internet and try again.', busy: 'The free AI is busy right now. Wait a moment and try again.', slow: 'The AI took too long. Try again.',
     badKey: 'The AI key is not valid.', blocked: 'The AI would not answer that one.', empty: 'The AI gave an empty answer. Try again.',
+    st_wiki: 'Looking it up on Wikipedia…', st_write: 'Writing a simple explanation…', st_check: 'Checking that every fact is right…',
+    checkedWiki: 'Fact-checked against Wikipedia:', checked: 'Fact-checked', unchecked: 'Could not double-check this one.', recheck: 'Check again',
     statusOk: 'AI connected ✓', statusBad: 'AI not reachable', statusOwn: 'Using your own key', defaultVoice: 'Default voice', langNames: { en: 'English', nb: 'Norwegian' },
     kids: [['🌈', 'rainbow'], ['🕳️', 'black hole'], ['🌐', 'the internet'], ['🍎', 'gravity'], ['💉', 'vaccine'], ['🌱', 'photosynthesis'], ['💸', 'inflation'], ['🤖', 'artificial intelligence'], ['⚡', 'electricity'], ['🧬', 'DNA'], ['🌋', 'volcano'], ['⛓️', 'blockchain'], ['🧲', 'magnet'], ['🌍', 'climate change'], ['📈', 'stock market'], ['🦠', 'bacteria'], ['🌙', 'why the moon changes shape'], ['🗳️', 'democracy'], ['✈️', 'how planes fly'], ['🧊', 'why ice floats']],
   },
@@ -48,6 +50,8 @@ const T = {
     transcribing: 'Skriver ned det du sa …', noKey: 'AI-en er ikke satt opp ennå. Eieren må legge inn secret CLOUDFLARE_API_TOKEN i GitHub-repoet (eller legg inn egen nøkkel under Innstillinger).',
     offline: 'Du er ikke på nett. Koble til internett og prøv igjen.', busy: 'Den gratis AI-en er opptatt akkurat nå. Vent litt og prøv igjen.', slow: 'AI-en brukte for lang tid. Prøv igjen.',
     badKey: 'AI-nøkkelen er ikke gyldig.', blocked: 'AI-en ville ikke svare på det.', empty: 'AI-en ga et tomt svar. Prøv igjen.',
+    st_wiki: 'Slår opp på Wikipedia …', st_write: 'Skriver en enkel forklaring …', st_check: 'Sjekker at alle fakta stemmer …',
+    checkedWiki: 'Faktasjekket mot Wikipedia:', checked: 'Faktasjekket', unchecked: 'Klarte ikke å dobbeltsjekke denne.', recheck: 'Sjekk igjen',
     statusOk: 'AI tilkoblet ✓', statusBad: 'Får ikke kontakt med AI-en', statusOwn: 'Bruker din egen nøkkel', defaultVoice: 'Standardstemme', langNames: { en: 'engelsk', nb: 'norsk' },
     kids: [['🌈', 'regnbue'], ['🕳️', 'sort hull'], ['🌐', 'internett'], ['🍎', 'tyngdekraft'], ['💉', 'vaksine'], ['🌱', 'fotosyntese'], ['💸', 'inflasjon'], ['🤖', 'kunstig intelligens'], ['⚡', 'strøm'], ['🧬', 'DNA'], ['🌋', 'vulkan'], ['⛓️', 'blokkjede'], ['🧲', 'magnet'], ['🌍', 'klimaendringer'], ['📈', 'aksjemarkedet'], ['🦠', 'bakterier'], ['🌙', 'hvorfor månen skifter form'], ['🗳️', 'demokrati'], ['✈️', 'hvordan fly flyr'], ['🌧️', 'hvorfor det regner']],
   },
@@ -124,7 +128,7 @@ async function readSSE(r, onText, signal) {
   if (!full.trim()) throw new Error(blocked ? t('blocked') : t('empty'));
   return full;
 }
-const cooldown = {}; let fastModel = null;
+const cooldown = {}; let fastModel = null, searchOffUntil = 0;
 function orderModels(list) {
   const now = Date.now();
   const ok = list.filter(m => !(cooldown[m] > now)), busy = list.filter(m => cooldown[m] > now).sort((a, b) => cooldown[a] - cooldown[b]);
@@ -133,7 +137,8 @@ function orderModels(list) {
 }
 const retryDelayOf = msg => { const m = String(msg).match(/retry in ([\d.]+)s|"retryDelay":\s*"(\d+)s"/i); return m ? Math.ceil(+(m[1] || m[2]) * 1000) : 0; };
 
-async function gemini({ contents, system = '', temp = 0.6, onText = null, signal = null }) {
+let lastModel = null;
+async function gemini({ contents, system = '', temp = 0.3, onText = null, signal = null, tools = null, avoid = null }) {
   if (!hasKey()) throw new Error(t('noKey'));
   if (!navigator.onLine) throw new Error(t('offline'));
   const base = await pickModels(), stream = !!onText, direct = !!settings.apiKey;
@@ -141,10 +146,13 @@ async function gemini({ contents, system = '', temp = 0.6, onText = null, signal
   if (system) body.systemInstruction = { parts: [{ text: system }] };
   let lastErr;
   for (let round = 0; round < 2; round++) {
-    for (const m of orderModels(base)) {
+    let order = orderModels(base);
+    // A different model checks the answer than the one that wrote it (catches more mistakes)
+    if (avoid && order.length > 1 && order.includes(avoid)) order = [...order.filter(x => x !== avoid), avoid];
+    for (const m of order) {
       if (round === 0 && cooldown[m] > Date.now() && base.some(x => !(cooldown[x] > Date.now()))) continue;
-      let useThink = true;
-      for (let again = 0; again < 2; again++) {
+      let useThink = true, useTools = !!tools && !(searchOffUntil > Date.now());
+      for (let again = 0; again < 3; again++) {
         const gc = { ...body.generationConfig };
         if (useThink) { const th = thinkCfg(m); if (th) gc.thinkingConfig = th; }
         const url = direct
@@ -154,7 +162,7 @@ async function gemini({ contents, system = '', temp = 0.6, onText = null, signal
         const onAbort = () => ac.abort(); signal?.addEventListener('abort', onAbort);
         let timer = setTimeout(() => ac.abort(), 25000);
         const r = await fetch(url, {
-          method: 'POST', signal: ac.signal, body: JSON.stringify({ ...body, generationConfig: gc }),
+          method: 'POST', signal: ac.signal, body: JSON.stringify({ ...body, generationConfig: gc, ...(useTools ? { tools } : {}) }),
           headers: direct ? { 'Content-Type': 'application/json', 'x-goog-api-key': settings.apiKey } : { 'Content-Type': 'application/json' },
         }).catch(e => ({ ok: false, status: e.name === 'AbortError' ? -1 : 0 }));
         const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
@@ -169,7 +177,7 @@ async function gemini({ contents, system = '', temp = 0.6, onText = null, signal
               txt = (d.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
               if (!txt.trim()) throw new Error(d.promptFeedback?.blockReason ? t('blocked') : t('empty'));
             }
-            done(); fastModel = /lite/.test(m) ? fastModel : m;
+            done(); lastModel = m; if (!tools) fastModel = /lite/.test(m) ? fastModel : m;
             return txt.trim();
           } catch (e) {
             done();
@@ -182,6 +190,7 @@ async function gemini({ contents, system = '', temp = 0.6, onText = null, signal
         if (r.status === -1) { cooldown[m] = Date.now() + 30000; lastErr = new Error(t('slow')); break; }
         let msg = ''; try { msg = (await r.json()).error?.message || ''; } catch { }
         if (r.status === 400 && useThink && /think/i.test(msg)) { useThink = false; continue; }
+        if (useTools && (r.status === 400 || r.status === 429) && /search|ground|tool/i.test(msg)) { useTools = false; searchOffUntil = Date.now() + 30 * 60e3; continue; }
         if (r.status === 404) { modelCache = null; settings.autoModels = null; saveSettings(); lastErr = new Error('Model not found: ' + m); break; }
         if (r.status === 400 && /API key/i.test(msg)) throw new Error(t('badKey'));
         if (r.status === 403) throw new Error(msg || t('noKey'));
@@ -212,7 +221,15 @@ function systemPrompt(th) {
   return `You are Eli5. You explain any word, phrase, idea or question so simply that the listener understands it right away.
 The listener is ${LEVEL[th.age]}.
 Rules:
-- Be correct. Simplify, but never say anything that is false.
+- ACCURACY COMES FIRST. Simplify by leaving things out, never by saying something that is not true. A simple sentence must still be a true sentence.
+- Take your facts from the SOURCES below. Do not add facts that are not in the sources, unless they are basic, undisputed common knowledge.
+- Never invent or guess numbers, dates, names, places, records or quotes. If you are not sure of a detail, leave it out.
+- Avoid "always", "never", "all", "only", "the biggest", "the first" unless that is exactly true.
+- A comparison must not make the listener believe something false. If a comparison only partly fits, say "a bit like" and keep it to what really matches.
+- Explain facts, never opinions. Don't say whether something is good or bad, right or wrong, and don't repeat what some people think as if it were a fact.
+- If something is a matter of opinion, politics, religion or taste, explain neutrally what it is, and say simply that people think differently about it, without taking a side.
+- If scientists or experts don't know yet, or disagree, say that simply instead of picking a side.
+- If the sources don't cover the question and you are not completely sure, say honestly and simply that you are not sure, instead of guessing.
 - Be warm, friendly and concrete. No talking down, no "Great question!", no filler.
 - Start every answer with ONE emoji that fits, alone on the first line.
 - Plain text only: no headings, no bullet lists, no bold, no markdown. Use a blank line between paragraphs if you need more than one.
@@ -222,7 +239,67 @@ Rules:
 - If it is a person, place, brand or event, explain who or what it is and why people know about it.
 - If the topic is sad, scary or grown-up, still explain it honestly, but gently and calmly.
 - For follow-ups, keep to the listener level above, add something new, and don't repeat what you already said.
-- Always write in ${langName}, even if the question is in another language.`;
+- Always write in ${langName}, even if the question is in another language.
+
+${sourcesBlock(th.sources)}`;
+}
+function sourcesBlock(src) {
+  if (!src?.length) return 'SOURCES: No Wikipedia article was found for this. Only say things you are completely sure are true. If you don\'t know what it is, say so simply and ask what they mean.';
+  return 'SOURCES (from Wikipedia). If a source is about something else than what is asked, ignore that source.\n\n' +
+    src.map((x, i) => `[${i + 1}] ${x.lang === 'no' ? 'Norwegian' : 'English'} Wikipedia: "${x.title}"\n${x.text}`).join('\n\n');
+}
+function verifyPrompt(th) {
+  return `You are a strict fact-checker for an app that explains things to children and curious people.
+The app simplifies on purpose. Leaving out details is fine, and simple words are fine. But NOTHING it says may be false or misleading.
+Check the ANSWER against the SOURCES and against your own solid knowledge.
+Flag: factual errors; wrong or made-up numbers, dates, names or places; claims the sources don't support and that aren't basic common knowledge; comparisons that would make the listener believe something false; words like "always", "never", "all", "only" that make a claim untrue; explaining the wrong meaning of the word; presenting something uncertain or disputed as settled; opinions or value judgements presented as facts (saying something is good/bad/right/wrong, or taking a side on a political, religious or moral question).
+Do NOT flag simplifications that are still true, and do not flag style.
+Reply with JSON only, no other text:
+{"source_matches": [numbers of the sources that are about what was asked, e.g. [1]],
+ "ok": true or false,
+ "issues": ["short description of each problem"],
+ "fixed": "only if ok is false: the full corrected answer. Same language, same listener level, about the same length, same format: one emoji alone on the first line, then plain text, keep or add at most 2 [[hard words]]. Fix only what is wrong. If ok is true: empty string"}
+
+${sourcesBlock(th.sources)}`;
+}
+function parseJSON(t) {
+  t = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  try { return JSON.parse(t); } catch { }
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) return JSON.parse(t.slice(a, b + 1));
+  throw new Error('bad json');
+}
+
+/* ---------- Wikipedia ---------- */
+const WIKI_LANG = { en: 'en', nb: 'no' };
+async function wikiApi(lang, params, signal) {
+  const r = await fetch(`https://${lang}.wikipedia.org/w/api.php?` + new URLSearchParams({ action: 'query', format: 'json', formatversion: '2', origin: '*', ...params }), { signal });
+  if (!r.ok) throw new Error('wiki ' + r.status);
+  return r.json();
+}
+async function wikiArticle(lang, page, max, signal) {
+  const e = await wikiApi(lang, { prop: 'extracts', explaintext: '1', exsectionformat: 'plain', titles: page.title, redirects: '1' }, signal);
+  let text = (e.query?.pages?.[0]?.extract || '').replace(/\n{3,}/g, '\n\n').trim();
+  if (text.length < 80) return null;
+  if (text.length > max) text = text.slice(0, max).replace(/\s+\S*$/, '') + ' …';
+  return { lang, title: page.title, url: page.fullurl || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(page.title.replace(/ /g, '_'))}`, text };
+}
+async function wikiSearch(q, lang, n, max, signal) {
+  const d = await wikiApi(lang, { generator: 'search', gsrsearch: q, gsrlimit: '6', prop: 'pageprops|info', ppprop: 'disambiguation', inprop: 'url', redirects: '1' }, signal);
+  const pages = (d.query?.pages || []).filter(p => !(p.pageprops && 'disambiguation' in p.pageprops)).sort((a, b) => a.index - b.index).slice(0, n);
+  return (await Promise.all(pages.map((p, i) => wikiArticle(lang, p, i ? max / 2 : max, signal).catch(() => null)))).filter(Boolean);
+}
+async function gatherSources(q, lang, signal) {
+  const main = WIKI_LANG[lang] || 'en';
+  const jobs = [wikiSearch(q, main, 2, 6000, signal)];
+  if (main !== 'en') jobs.push(wikiSearch(q, 'en', 1, 6000, signal));   // English Wikipedia is often more complete
+  const res = await Promise.allSettled(jobs);
+  return res.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+}
+function addSources(th, list) {
+  th.sources = th.sources || [];
+  for (const s of list) if (!th.sources.some(x => x.url === s.url)) th.sources.push(s);
+  th.sources = th.sources.slice(0, 6);
 }
 const FOLLOW = {
   more: () => 'Tell me more about it. Add new things I haven’t heard yet, like how it works or why. Keep it just as simple.',
@@ -259,30 +336,52 @@ async function follow(kind, extra, spoken = false) {
   if (!current || busy) return;
   stopSpeaking(); current.lang = settings.lang;
   let label, prompt;
+  let term;
   if (kind === 'older') { current.age = extra; label = '📈 ' + t('older', extra); prompt = FOLLOW.older(extra); }
-  else if (kind === 'term') { label = '🔎 ' + t('whatIs', extra); prompt = `What does "${extra}" mean? Explain just that word, in the context of what we talked about.`; }
+  else if (kind === 'term') { label = '🔎 ' + t('whatIs', extra); prompt = `What does "${extra}" mean? Explain just that word, in the context of what we talked about.`; term = extra; }
   else if (kind === 'ask') { label = extra; prompt = extra; }
   else { label = { more: '🔍 ', other: '🔄 ', example: '💡 ', why: '🤔 ' }[kind] + t(kind); prompt = FOLLOW[kind](); }
-  current.turns.push({ role: 'user', text: label, prompt, kind });
+  current.turns.push({ role: 'user', text: label, prompt, kind, term });
   renderThread(); scrollEnd();
   await ask(spoken);
 }
+function setStatus(turn, st) { turn.status = st; if (current) updateLastCard(); }
 async function ask(spoken) {
   const th = current; busy = true;
   // drop any old failed answer before trying again
   th.turns = th.turns.filter(x => !x.error);
-  const turn = { role: 'model', text: '', age: th.age, pending: true };
+  const turn = { role: 'model', text: '', age: th.age, pending: true, status: 'wiki' };
   th.turns.push(turn);
   renderThread(); scrollEnd();
-  abortCtl = new AbortController();
-  let lastRender = 0;
+  abortCtl = new AbortController(); const signal = abortCtl.signal;
   try {
+    // 1. Look it up on Wikipedia (the topic first time, and any tapped word)
+    const req = th.turns.filter(x => x.role === 'user').slice(-1)[0];
+    if (!th.sources) addSources(th, await gatherSources(th.topic, th.lang, signal).catch(() => []));
+    if (req.kind === 'term') addSources(th, await gatherSources(req.term, th.lang, signal).catch(() => []));
+    if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+    // 2. Write the answer from the sources
+    setStatus(turn, 'write');
     const contents = contentsOf({ turns: th.turns.filter(x => x !== turn) });
-    const txt = await gemini({
-      contents, system: systemPrompt(th), signal: abortCtl.signal,
-      onText: f => { turn.text = f; const n = performance.now(); if (n - lastRender > 60) { lastRender = n; updateLastCard(); } },
-    });
-    turn.text = txt; turn.pending = false;
+    let txt = await gemini({ contents, system: systemPrompt(th), signal });
+    const writer = lastModel;
+    // 3. Fact-check it (another model, against the same sources) and fix anything wrong before showing it
+    setStatus(turn, 'check');
+    const reqText = req === th.turns[0] ? `Explain: ${th.topic}` : `${req.prompt || req.text} (the conversation is about: ${th.topic})`;
+    try {
+      const v = parseJSON(await gemini({
+        temp: 0, signal, avoid: writer, system: verifyPrompt(th),
+        contents: [{ role: 'user', parts: [{ text: `REQUEST: ${reqText}\nLISTENER: ${LEVEL[th.age].split('.')[0]}\n\nANSWER TO CHECK:\n${txt}` }] }],
+      }));
+      if (v.ok === false && typeof v.fixed === 'string' && v.fixed.trim().length > 10) { txt = v.fixed.trim(); turn.checked = 'fixed'; }
+      else turn.checked = 'ok';
+      const used = (Array.isArray(v.source_matches) ? v.source_matches : []).map(n => th.sources[+n - 1]).filter(Boolean);
+      turn.sources = used.map(({ title, url, lang }) => ({ title, url, lang }));
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      turn.checked = 'no';
+    }
+    turn.text = txt; turn.pending = false; delete turn.status;
     if (current !== th) return;
     th.t = Date.now(); saveThread(th);
     renderThread();
@@ -319,7 +418,7 @@ const ICON = {
 };
 function cardHTML(turn, idx) {
   if (turn.error) return `<div class="card err" data-idx="${idx}"><div class="body"><p>😕 ${esc(turn.text)}</p></div><div class="acts"><button class="retry" data-act="retry">↻ ${esc(t('retry'))}</button></div></div>`;
-  if (turn.pending && !turn.text) return `<div class="card" data-idx="${idx}"><div class="typing"><i></i><i></i><i></i></div></div>`;
+  if (turn.pending && !turn.text) return `<div class="card" data-idx="${idx}"><div class="typing"><i></i><i></i><i></i></div><p class="status">${esc(t('st_' + (turn.status || 'write')))}</p></div>`;
   const { emoji, body } = parseAnswer(turn.text);
   const lvl = t('level', turn.age ?? 5);
   const speakingThis = speakingIdx === idx;
@@ -327,7 +426,13 @@ function cardHTML(turn, idx) {
     <button data-act="read" class="${speakingThis ? 'speaking' : ''}">${speakingThis ? ICON.stop : ICON.read}<span>${esc(speakingThis ? t('stop') : t('read'))}</span></button>
     <button data-act="copy">${ICON.copy}<span>${esc(t('copy'))}</span></button>
     ${navigator.share ? `<button data-act="share">${ICON.share}<span>${esc(t('share'))}</span></button>` : ''}</div>`;
-  return `<div class="card" data-idx="${idx}">${lvl ? `<span class="level">${esc(lvl)}</span>` : ''}${emoji ? `<div class="emo">${emoji}</div>` : ''}<div class="body">${bodyHTML(body, turn.pending)}</div>${acts}</div>`;
+  let chk = '';
+  if (turn.checked === 'no') chk = `<p class="check warn">⚠️ ${esc(t('unchecked'))}${!turn.pending && idx === current.turns.length - 1 ? ` <button class="link-btn" data-act="redo">↻ ${esc(t('recheck'))}</button>` : ''}</p>`;
+  else if (turn.checked) {
+    const links = (turn.sources || []).map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(', ');
+    chk = `<p class="check">✓ ${links ? esc(t('checkedWiki')) + ' ' + links : esc(t('checked'))}</p>`;
+  }
+  return `<div class="card" data-idx="${idx}">${lvl ? `<span class="level">${esc(lvl)}</span>` : ''}${emoji ? `<div class="emo">${emoji}</div>` : ''}<div class="body">${bodyHTML(body, turn.pending)}</div>${chk}${acts}</div>`;
 }
 function renderThread() {
   if (!current) return;
@@ -409,6 +514,7 @@ $('#turns').onclick = async e => {
   const idx = +b.closest('.card').dataset.idx, turn = current.turns[idx];
   const plain = () => { const { emoji, body } = parseAnswer(turn.text); return body.replace(/\[\[|\]\]/g, ''); };
   if (b.dataset.act === 'retry') { if (!busy) ask(false); }
+  else if (b.dataset.act === 'redo') { if (!busy && idx === current.turns.length - 1) { current.turns.pop(); ask(false); } }
   else if (b.dataset.act === 'read') { speakingIdx === idx ? stopSpeaking() : speak(turn, idx); }
   else if (b.dataset.act === 'copy') { try { await navigator.clipboard.writeText(`${current.topic}\n\n${plain()}`); toast(t('copied')); } catch { } }
   else if (b.dataset.act === 'share') { navigator.share({ title: current.topic, text: `${current.topic}: ${plain()}`, url: location.href.split('#')[0] }).catch(() => { }); }
