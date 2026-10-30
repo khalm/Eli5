@@ -1,6 +1,6 @@
 'use strict';
 /* Eli5 – explain any word or phrase like you're five */
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const PROXY = (window.ELI5_PROXY || '').replace(/\/$/, '');
 const $ = s => document.querySelector(s);
@@ -34,6 +34,7 @@ const T = {
     badKey: 'The AI key is not valid.', blocked: 'The AI would not answer that one.', empty: 'The AI gave an empty answer. Try again.',
     st_wiki: 'Looking it up on Wikipedia…', st_write: 'Writing a simple explanation…', st_check: 'Checking that every fact is right…',
     checkedWiki: 'Fact-checked against Wikipedia:', checked: 'Fact-checked', unchecked: 'Could not double-check this one.', recheck: 'Check again',
+    shareApp: 'Share Eli5 with someone', shareText: 'Eli5 explains any word or phrase like you’re five. Type or just say it:', linkCopied: 'Link copied – paste it in a message',
     statusOk: 'AI connected ✓', statusBad: 'AI not reachable', statusOwn: 'Using your own key', defaultVoice: 'Default voice', langNames: { en: 'English', nb: 'Norwegian' },
     kids: [['🌈', 'rainbow'], ['🕳️', 'black hole'], ['🌐', 'the internet'], ['🍎', 'gravity'], ['💉', 'vaccine'], ['🌱', 'photosynthesis'], ['💸', 'inflation'], ['🤖', 'artificial intelligence'], ['⚡', 'electricity'], ['🧬', 'DNA'], ['🌋', 'volcano'], ['⛓️', 'blockchain'], ['🧲', 'magnet'], ['🌍', 'climate change'], ['📈', 'stock market'], ['🦠', 'bacteria'], ['🌙', 'why the moon changes shape'], ['🗳️', 'democracy'], ['✈️', 'how planes fly'], ['🧊', 'why ice floats']],
   },
@@ -52,6 +53,7 @@ const T = {
     badKey: 'AI-nøkkelen er ikke gyldig.', blocked: 'AI-en ville ikke svare på det.', empty: 'AI-en ga et tomt svar. Prøv igjen.',
     st_wiki: 'Slår opp på Wikipedia …', st_write: 'Skriver en enkel forklaring …', st_check: 'Sjekker at alle fakta stemmer …',
     checkedWiki: 'Faktasjekket mot Wikipedia:', checked: 'Faktasjekket', unchecked: 'Klarte ikke å dobbeltsjekke denne.', recheck: 'Sjekk igjen',
+    shareApp: 'Del Eli5 med noen', shareText: 'Eli5 forklarer alle ord og uttrykk som om du er fem år. Bare skriv eller si det:', linkCopied: 'Lenken er kopiert – lim den inn i en melding',
     statusOk: 'AI tilkoblet ✓', statusBad: 'Får ikke kontakt med AI-en', statusOwn: 'Bruker din egen nøkkel', defaultVoice: 'Standardstemme', langNames: { en: 'engelsk', nb: 'norsk' },
     kids: [['🌈', 'regnbue'], ['🕳️', 'sort hull'], ['🌐', 'internett'], ['🍎', 'tyngdekraft'], ['💉', 'vaksine'], ['🌱', 'fotosyntese'], ['💸', 'inflasjon'], ['🤖', 'kunstig intelligens'], ['⚡', 'strøm'], ['🧬', 'DNA'], ['🌋', 'vulkan'], ['⛓️', 'blokkjede'], ['🧲', 'magnet'], ['🌍', 'klimaendringer'], ['📈', 'aksjemarkedet'], ['🦠', 'bakterier'], ['🌙', 'hvorfor månen skifter form'], ['🗳️', 'demokrati'], ['✈️', 'hvordan fly flyr'], ['🌧️', 'hvorfor det regner']],
   },
@@ -709,6 +711,13 @@ async function checkStatus() {
   try { const r = await fetch(PROXY + '/health'); const d = await r.json(); el.textContent = d.key ? t('statusOk') : t('noKey'); }
   catch { el.textContent = t('statusBad'); }
 }
+
+/* ---------- share the app ---------- */
+const APP_URL = 'https://khalm.github.io/Eli5/';
+$('#shareAppBtn').onclick = async () => {
+  if (navigator.share) { try { await navigator.share({ title: 'Eli5', text: t('shareText'), url: APP_URL }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(`${t('shareText')} ${APP_URL}`); toast(t('linkCopied'), 3000); } catch { prompt('', APP_URL); }
+};
 
 /* ---------- install ---------- */
 let deferredPrompt = null;
